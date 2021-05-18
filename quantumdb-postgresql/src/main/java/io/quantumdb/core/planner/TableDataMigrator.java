@@ -244,6 +244,8 @@ class TableDataMigrator {
 				return Double.parseDouble(value);
 			case BIGINT:
 				return Long.parseLong(value);
+			case NUMERIC:
+				return Double.parseDouble(value);
 			case BOOLEAN:
 				return Boolean.parseBoolean(value);
 			case TEXT:

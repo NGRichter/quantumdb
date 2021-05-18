@@ -8,8 +8,15 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.util.*;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Objects;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -119,15 +126,9 @@ public class Backend {
 								.map(Ints::tryParse)
 								.collect(Collectors.toList());
 
-						if (arguments.size() == 2) {
-							return PostgresTypes.from(sqlType, arguments.get(0), arguments.get(1));
-						} else if (arguments.size() == 1) {
-							return PostgresTypes.from(sqlType, arguments.get(0), -1);
-						} else {
-							return PostgresTypes.from(sqlType, -1, -1);
-						}
+						return PostgresTypes.from(sqlType, arguments.get(0));
 					}
-					return PostgresTypes.from(sqlType, -1, -1);
+					return PostgresTypes.from(sqlType, null);
 				})
 				.registerTypeAdapter(ColumnType.class, (JsonSerializer<ColumnType>)
 						(element, type, context) -> new JsonPrimitive(element.getNotation()))
@@ -173,6 +174,7 @@ public class Backend {
 										.map(columnCache::get)
 										.filter(Objects::nonNull)
 										.collect(Collectors.toList());
+
 								return new ColumnRef(column.getColumn(), basedOn);
 							}, (l, r) -> l, LinkedHashMap::new));
 
@@ -736,7 +738,7 @@ public class Backend {
 	}
 
 	private void persistSynchronizerColumns(Connection connection, Map<Long, SyncRef> syncRefs,
-			Map<Long, RawColumnMapping> columnMapping) throws SQLException {
+											Map<Long, RawColumnMapping> columnMapping) throws SQLException {
 
 		Table<String, String, Long> syncIndex = HashBasedTable.create();
 		syncRefs.forEach((id, ref) -> syncIndex.put(ref.getSource().getRefId(), ref.getTarget().getRefId(), id));

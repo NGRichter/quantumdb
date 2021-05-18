@@ -6,17 +6,28 @@ import static io.quantumdb.core.schema.definitions.ForeignKey.Action.RESTRICT;
 import static io.quantumdb.core.schema.definitions.ForeignKey.Action.SET_DEFAULT;
 import static io.quantumdb.core.schema.definitions.ForeignKey.Action.SET_NULL;
 
-import java.sql.*;
-import java.util.*;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import com.google.common.base.Joiner;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
-import io.quantumdb.core.schema.definitions.*;
+import io.quantumdb.core.schema.definitions.Catalog;
+import io.quantumdb.core.schema.definitions.Column;
 import io.quantumdb.core.schema.definitions.ForeignKey.Action;
+import io.quantumdb.core.schema.definitions.Index;
+import io.quantumdb.core.schema.definitions.PostgresTypes;
+import io.quantumdb.core.schema.definitions.Sequence;
+import io.quantumdb.core.schema.definitions.Table;
 import io.quantumdb.core.utils.QueryBuilder;
 import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
@@ -46,7 +57,7 @@ class CatalogLoader {
 
 			ResultSet resultSet = statement.executeQuery();
 			while (resultSet.next()) {
-				String tableName = getString(resultSet.getString("table_name"));
+				String tableName = resultSet.getString("table_name");
 				tableNames.add(tableName);
 			}
 		}
@@ -80,31 +91,18 @@ class CatalogLoader {
 
 		List<Column> columns = Lists.newArrayList();
 		Set<String> primaryKeys = determinePrimaryKeys(connection, tableName);
-		Map<String,List<String>> uniqueConstraints = determineUniqueConstraints(connection, tableName);
 		try (PreparedStatement statement = connection.prepareStatement(query)) {
 			statement.setString(1, "public");
 			statement.setString(2, tableName);
 
 			ResultSet resultSet = statement.executeQuery();
 			while (resultSet.next()) {
-				String columnName = getString(resultSet.getString("column_name"));
+				String columnName = resultSet.getString("column_name");
 				String expression = resultSet.getString("column_default");
 				String type = resultSet.getString("data_type");
 				Integer characterMaximum = null;
 				if (resultSet.getObject("character_maximum_length") != null) {
 					characterMaximum = resultSet.getInt("character_maximum_length");
-				}
-				Integer numericPrecision = null;
-				if (resultSet.getObject("numeric_precision") != null) {
-					numericPrecision = resultSet.getInt("numeric_precision");
-				}
-				Integer numericScale = null;
-				if (resultSet.getObject("numeric_scale") != null) {
-					numericScale = resultSet.getInt("numeric_scale");
-				}
-				Integer datetimePrecision = null;
-				if (!type.equals("date") && resultSet.getObject("datetime_precision") != null) {
-					datetimePrecision = resultSet.getInt("datetime_precision");
 				}
 
 				Set<Column.Hint> hints = Sets.newHashSet();
@@ -112,10 +110,7 @@ class CatalogLoader {
 					hints.add(Column.Hint.NOT_NULL);
 				}
 				if (primaryKeys.contains(columnName) || (primaryKeys.isEmpty() && columns.isEmpty())) {
-					hints.add(Column.Hint.PRIMARY_KEY);
-				}
-				if (uniqueConstraints.values().stream().anyMatch(columnNameList -> columnNameList.contains(columnName))) {
-					hints.add(Column.Hint.UNIQUE);
+					hints.add(Column.Hint.IDENTITY);
 				}
 
 				Sequence sequence = null;
@@ -127,22 +122,17 @@ class CatalogLoader {
 					}
 				}
 
-				Column.Hint[] hintArray = hints.toArray(Column.Hint[]::new);
+				Column.Hint[] hintArray = hints.toArray(new Column.Hint[0]);
 
 				Column column;
-				int length = characterMaximum != null ? characterMaximum : numericPrecision != null ? numericPrecision : datetimePrecision != null ? datetimePrecision : -1;
 				if (sequence == null) {
-					column = new Column(columnName, PostgresTypes.from(type, length, numericScale != null ? numericScale : -1), expression, hintArray);
+					column = new Column(columnName, PostgresTypes.from(type, characterMaximum), expression, hintArray);
 				}
 				else {
-					column = new Column(columnName, PostgresTypes.from(type, length, numericScale != null ? numericScale : -1), sequence, hintArray);
+					column = new Column(columnName, PostgresTypes.from(type, characterMaximum), sequence, hintArray);
 				}
 				columns.add(column);
 			}
-		}
-		for (Map.Entry<String,List<String>> uniqueConstraintEntry: uniqueConstraints.entrySet()) {
-			Unique unique = new Unique(uniqueConstraintEntry.getKey(), uniqueConstraintEntry.getValue());
-			table.addUnique(unique);
 		}
 
 		return table.addColumns(columns);
@@ -168,54 +158,12 @@ class CatalogLoader {
 
 			ResultSet resultSet = statement.executeQuery(query);
 			while (resultSet.next()) {
-				String name = getString(resultSet.getString("name"));
+				String name = resultSet.getString("name");
 				primaryKeyColumns.add(name);
 			}
 		}
 
 		return primaryKeyColumns;
-	}
-
-	private static Map<String,List<String>> determineUniqueConstraints(Connection connection, String tableName) throws SQLException {
-		String query = new QueryBuilder()
-				.append("SELECT ")
-				.append("  conkey::int[], conname ")
-				.append("FROM pg_constraint ")
-				.append("WHERE ")
-				.append("  conrelid = ")
-				.append("  (SELECT oid ")
-				.append("  FROM pg_class")
-				.append("  WHERE relname LIKE '" + tableName + "')")
-				.append("  AND contype='u';")
-				.toString();
-
-		Map<String,List<String>> uniqueColumns = Maps.newLinkedHashMap();
-		try (Statement statement = connection.createStatement()) {
-
-			ResultSet resultSet = statement.executeQuery(query);
-			while (resultSet.next()) {
-				Integer[] uniqueColumnIntegers = (Integer[]) resultSet.getArray("conkey").getArray();
-				String conName = resultSet.getString("conname");
-				uniqueColumns.put(conName, Lists.newArrayList());
-				query = new QueryBuilder()
-						.append("SELECT ")
-						.append("  column_name ")
-						.append("FROM information_schema.columns ")
-						.append("WHERE ")
-						.append("  table_name LIKE '" + tableName + "'")
-						.append("  AND ordinal_position IN (" + Joiner.on(',').join(uniqueColumnIntegers) + ");")
-						.toString();
-
-				try (Statement statement1 = connection.createStatement()) {
-					ResultSet resultSet2 = statement1.executeQuery(query);
-					while (resultSet2.next()) {
-						uniqueColumns.get(conName).add(resultSet2.getString(1));
-					}
-				}
-			}
-		}
-
-		return uniqueColumns;
 	}
 
 	private static void addForeignKeys(Connection connection, Catalog catalog, String tableName) throws SQLException {
@@ -261,10 +209,10 @@ class CatalogLoader {
 			Map<String, String> mapping = Maps.newLinkedHashMap();
 
 			while (resultSet.next()) {
-				String referencingColumn = getString(resultSet.getString("referencing_column"));
-				String referredTable = getString(resultSet.getString("referred_table"));
-				String referredColumn = getString(resultSet.getString("referred_column"));
-				String constraintName = getString(resultSet.getString("constraint_name"));
+				String referencingColumn = resultSet.getString("referencing_column");
+				String referredTable = resultSet.getString("referred_table");
+				String referredColumn = resultSet.getString("referred_column");
+				String constraintName = resultSet.getString("constraint_name");
 
 				Action onUpdate = valueOf(resultSet.getString("confupdtype"));
 				Action onDelete = valueOf(resultSet.getString("confdeltype"));
@@ -302,13 +250,6 @@ class CatalogLoader {
 		}
 	}
 
-	private static String getString(String string) {
-		if (!string.equals(string.toLowerCase())) {
-			string = "\"" + string + "\"";
-		}
-		return string;
-	}
-
 	private static Action valueOf(String input) {
 		switch (input) {
 			case "a": return NO_ACTION;
@@ -343,6 +284,7 @@ class CatalogLoader {
 				parser.expect("INDEX");
 				parser.present("CONCURRENTLY");
 				String indexName = parser.consume();
+				indexName = removeOuterQuotes(indexName);
 				if (indexName.startsWith("pk_")) {
 					continue;
 				}
@@ -352,6 +294,10 @@ class CatalogLoader {
 				if (indexTableName.startsWith("public.")) {
 					indexTableName = indexTableName.substring("public.".length());
 				}
+				else if (indexTableName.startsWith("\"public\".")) {
+					indexTableName = indexTableName.substring("\"public\".".length());
+				}
+				indexTableName = removeOuterQuotes(indexTableName);
 
 				if (parser.present("USING")) {
 					parser.consume();
@@ -365,4 +311,16 @@ class CatalogLoader {
 			}
 		}
 	}
+
+	private static String removeOuterQuotes(String input) {
+		if (input != null && input.length() >= 2) {
+			int head = 0;
+			int tail = input.length() - 1;
+			if (input.charAt(head) == '\"' && input.charAt(tail) == '\"') {
+				return input.substring(head + 1, tail);
+			}
+		}
+		return input;
+	}
+
 }

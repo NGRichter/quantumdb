@@ -20,7 +20,7 @@ import lombok.Setter;
 public class Column implements Copyable<Column> {
 
 	public static enum Hint {
-		NOT_NULL, AUTO_INCREMENT, UNIQUE, PRIMARY_KEY;
+		NOT_NULL, AUTO_INCREMENT, IDENTITY;
 	}
 
 	private String name;
@@ -93,12 +93,8 @@ public class Column implements Copyable<Column> {
 		this.defaultValue = null;
 	}
 
-	public boolean isPrimaryKey() {
-		return hints.contains(Hint.PRIMARY_KEY);
-	}
-
-	public boolean isUnique() {
-		return hints.contains(Hint.UNIQUE);
+	public boolean isIdentity() {
+		return hints.contains(Hint.IDENTITY);
 	}
 
 	public boolean isAutoIncrement() {
@@ -130,7 +126,7 @@ public class Column implements Copyable<Column> {
 
 	@Override
 	public Column copy() {
-		return new Column(name, type, sequence, defaultValue, hints.toArray(Hint[]::new));
+		return new Column(name, type, sequence, defaultValue, hints.toArray(new Hint[0]));
 	}
 
 	@Override

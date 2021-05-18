@@ -3,7 +3,11 @@ package io.quantumdb.core.schema.definitions;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 
-import java.util.*;
+import java.util.Collection;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import com.google.common.base.Strings;
@@ -18,7 +22,7 @@ import lombok.EqualsAndHashCode;
 import lombok.Setter;
 
 @Data
-@EqualsAndHashCode(exclude = { "parent", "foreignKeys", "indexes", "uniques" })
+@EqualsAndHashCode(exclude = { "parent", "foreignKeys", "indexes" })
 @Setter(AccessLevel.NONE)
 public class Table implements Copyable<Table>, Comparable<Table> {
 
@@ -76,7 +80,6 @@ public class Table implements Copyable<Table>, Comparable<Table> {
 	private final LinkedHashSet<Column> columns = Sets.newLinkedHashSet();
 	private final List<ForeignKey> foreignKeys = Lists.newArrayList();
 	private final List<Index> indexes = Lists.newArrayList();
-	private final List<Unique> uniques = Lists.newArrayList();
 
 	public Table(String name) {
 		checkArgument(!Strings.isNullOrEmpty(name), "You must specify a 'name'.");
@@ -146,56 +149,6 @@ public class Table implements Copyable<Table>, Comparable<Table> {
 		return ImmutableList.copyOf(indexes);
 	}
 
-	public Table addUnique(Unique unique) {
-		checkArgument(unique != null, "You must specify a 'unique'.");
-		checkState(!containsUnique(unique.getUniqueName()), "Table already contains a unique with name: " + unique.getUniqueName());
-
-		uniques.add(unique);
-		unique.setParent(this);
-		return this;
-	}
-
-	public boolean containsUnique(String... columns) {
-		return containsUnique(Sets.newHashSet(columns));
-	}
-
-	public boolean containsUnique(Collection<String> columns) {
-		checkArgument(!columns.isEmpty(), "You must specify at least one entry in 'columns'.");
-
-		return uniques.stream()
-				.anyMatch(c -> c.getColumns().equals(Lists.newArrayList(columns)));
-	}
-
-	public Unique removeUnique(String... columns) {
-		return removeUnique(Sets.newHashSet(columns));
-	}
-
-	public Unique removeUnique(Collection<String> columns) {
-		checkState(containsUnique(columns), "You cannot remove a unique which does not exist: " + columns);
-
-		Unique unique = getUnique(columns);
-		unique.setParent(null);
-		uniques.remove(unique);
-		return unique;
-	}
-
-	public Unique getUnique(String... columns) {
-		return getUnique(Sets.newHashSet(columns));
-	}
-
-	public Unique getUnique(Collection<String> columns) {
-		checkArgument(!columns.isEmpty(), "You must specify at least one 'columns'.");
-
-		return uniques.stream()
-				.filter(c -> c.getColumns().equals(Lists.newArrayList(columns)))
-				.findFirst()
-				.orElse(null);
-	}
-
-	public ImmutableList<Unique> getUniques() {
-		return ImmutableList.copyOf(uniques);
-	}
-	
 	public Table addColumn(Column column) {
 		checkArgument(column != null, "You must specify a 'column'.");
 		checkState(!containsColumn(column.getName()), "Table already contains a column with name: " + column.getName());
@@ -221,9 +174,9 @@ public class Table implements Copyable<Table>, Comparable<Table> {
 						"Table: " + name + " does not contain column: " + columnName));
 	}
 
-	public List<Column> getPrimaryKeyColumns() {
+	public List<Column> getIdentityColumns() {
 		return getColumns().stream()
-				.filter(Column::isPrimaryKey)
+				.filter(Column::isIdentity)
 				.collect(Collectors.toList());
 	}
 
@@ -242,7 +195,7 @@ public class Table implements Copyable<Table>, Comparable<Table> {
 		checkState(column.getIncomingForeignKeys().isEmpty(),
 				"You cannot remove a column that is still referenced by foreign keys.");
 
-		List<Column> identityColumns = getPrimaryKeyColumns();
+		List<Column> identityColumns = getIdentityColumns();
 		identityColumns.remove(column);
 		checkState(!identityColumns.isEmpty(), "You drop the last remaining identity column of a table.");
 

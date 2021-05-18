@@ -2,8 +2,11 @@ package io.quantumdb.core.planner;
 
 import static io.quantumdb.core.utils.RandomHasher.generateHash;
 
-import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -72,13 +75,13 @@ public class SyncFunction {
 		Map<String, String> mapping = columnMapping.entrySet().stream()
 				.filter(entry -> {
 					Column column = sourceTable.getColumn(entry.getKey().getName());
-					return columnsToMigrate.contains(entry.getValue().getName()) || column.isPrimaryKey();
+					return columnsToMigrate.contains(entry.getValue().getName()) || column.isIdentity();
 				})
 				.collect(Collectors.toMap(entry -> entry.getKey().getName(), entry -> entry.getValue().getName()));
 
 		Map<String, String> expressions = mapping.entrySet().stream()
-				.collect(Collectors.toMap(Entry::getValue,
-						entry -> "NEW." + entry.getKey(),
+				.collect(Collectors.toMap(entry -> "\"" + entry.getValue() + "\"",
+						entry -> "NEW.\"" + entry.getKey() + "\"",
 						(u, v) -> { throw new IllegalStateException(String.format("Duplicate key %s", u)); },
 						Maps::newLinkedHashMap));
 
@@ -101,7 +104,7 @@ public class SyncFunction {
 						}
 					}
 
-					expressions.put(columnName, value);
+					expressions.put("\"" + columnName + "\"", value);
 				}
 			}
 		}
@@ -109,25 +112,25 @@ public class SyncFunction {
 		this.insertExpressions = ImmutableMap.copyOf(expressions);
 		this.updateExpressions = ImmutableMap.copyOf(insertExpressions);
 
-		this.updateIdentitiesForInserts = ImmutableMap.copyOf((Map<? extends String, ? extends String>)targetTable.getColumns().stream()
-				.filter(column -> reverseLookup(mapping, column.getName()).isPresent())
-				.collect(Collectors.toMap(Column::getName,
-						column -> "NEW." + reverseLookup(mapping, column.getName()).get(),
+		this.updateIdentitiesForInserts = ImmutableMap.copyOf((Map<? extends String, ? extends String>)targetTable.getIdentityColumns().stream()
+				.collect(Collectors.toMap(column -> "\"" + column.getName() + "\"",
+						column -> "NEW.\"" + reverseLookup(mapping, column.getName()) + "\"",
 						(u, v) -> { throw new IllegalStateException(String.format("Duplicate key %s", u)); },
 						Maps::newLinkedHashMap)));
 
-		this.updateIdentities = ImmutableMap.copyOf((Map<? extends String, ? extends String>)targetTable.getPrimaryKeyColumns().stream()
-				.collect(Collectors.toMap(Column::getName,
-						column -> "OLD." + reverseLookup(mapping, column.getName()).get(),
+		this.updateIdentities = ImmutableMap.copyOf((Map<? extends String, ? extends String>)targetTable.getIdentityColumns().stream()
+				.collect(Collectors.toMap(column -> "\"" + column.getName() + "\"",
+						column -> "OLD.\"" + reverseLookup(mapping, column.getName()) + "\"",
 						(u, v) -> { throw new IllegalStateException(String.format("Duplicate key %s", u)); },
 						Maps::newLinkedHashMap)));
 	}
 
-	private Optional<String> reverseLookup(Map<String, String> mapping, String value) {
+	private String reverseLookup(Map<String, String> mapping, String value) {
 		return mapping.entrySet().stream()
 				.filter(entry -> entry.getValue().equals(value))
 				.findFirst()
-				.map(Entry::getKey);
+				.map(Entry::getKey)
+				.get();
 	}
 
 	public QueryBuilder createFunctionStatement() {
@@ -135,11 +138,6 @@ public class SyncFunction {
 				.append("CREATE OR REPLACE FUNCTION " + functionName + "()")
 				.append("RETURNS TRIGGER AS $$")
 				.append("BEGIN")
-				.append("  SET LOCAL quantumdb." + source.getRefId() + " = 'true';")
-				.append("  IF current_setting('quantumdb." + target.getRefId() + "', true) = 'true' THEN")
-				.append("    RETURN NEW;")
-				.append("  END IF;")
-				.append("  SET LOCAL quantumdb." + target.getRefId() + " = 'true';")
 				.append("  IF TG_OP = 'INSERT' THEN")
 				.append("    INSERT INTO " + target.getRefId())
 				.append("      (" + represent(insertExpressions, Entry::getKey, ", ") + ") VALUES")
@@ -184,6 +182,7 @@ public class SyncFunction {
 				.append("AFTER INSERT OR UPDATE OR DELETE")
 				.append("ON " + source.getRefId())
 				.append("FOR EACH ROW")
+				.append("WHEN (pg_trigger_depth() = 0)")
 				.append("EXECUTE PROCEDURE " + functionName + "();");
 	}
 
